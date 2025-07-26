@@ -1,91 +1,124 @@
-import logging
-import requests
 import asyncio
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
-)
+import logging
+import websockets
+import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
-    Application, CallbackQueryHandler, ContextTypes, filters
+    Application, CommandHandler, CallbackQueryHandler, MessageHandler,
+    ContextTypes, filters
 )
 
 TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
 
+# Diccionario editable en vivo por panel admin
 config = {
     "emoji": "👶🏼⚔️",
-    "video": "https://www.pexels.com/video/854159.mp4"
+    "video": "https://www.pexels.com/video/854159.mp4",
+    "msg_template": (
+        "{emojis}\n\n"
+        "🪙 <b>COMPRA:</b> {amount_xrp:.2f} XRP (${amount_usd:.2f})\n"
+        "💸 <b>Marketcap:</b> ${marketcap:,}\n"
+        "{holder_text}"
+        "👥 Holders: <b>{holders_total}</b>\n"
+        "🔗 Trustlines: <b>{trustlines}</b>\n\n"
+    ),
+    # Enlaces y textos de botón
+    "link_tx": "https://xrpscan.com/tx/{tx_hash}",
+    "link_buyer": "https://xrpscan.com/account/{buyer}",
+    "link_chart": "https://dexscreener.com/xrpl/4241425941524D59000000000000000000000000.rHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_xrp",
+    "link_xmag": "https://xmagnetic.org/dex/BABYARMY%2BrHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_XRP%2BXRP?network=mainnet",
+    "link_buy": "https://t.me/firstledger_bot?start=ref_P3qusTcUSdc2",
+    "button_tx": "Tx",
+    "button_buyer": "Buyer",
+    "button_chart": "Chart",
+    "button_xmag": "Xmagnetic",
+    "button_buy": "BUY"
 }
 
-# ========= XRPL BUY INTEGRATION SECTION =========
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def get_latest_buys():
-    # Ejemplo de integración: consulta las últimas TXs, filtra solo COMPRA
-    # Usa la api de xrpscan (o puedes integrar una WebSocket real)
-    # Mejorable: usa el websocket para detección instantánea y menor delay
-    url = "https://api.xrpscan.com/api/v1/account/txs/BABYARMY_rHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_XRP"
-    try:
-        data = requests.get(url, timeout=10).json()
-        result = []
-        for tx in data.get("transactions", []):
-            # Aquí debes SUPLANTAR LA LÓGICA para identificar una "compra" en tu par de XRPL
-            # Simulación: es 'buy' si TransactionType es Payment y Destination es tu cuenta
-            txinfo = tx.get("tx", {})
-            if txinfo.get("TransactionType") != "Payment":
-                continue
-            # TODO: aquí tu lógica para COMPRA real (puede variar)
-            result.append({
-                "buyer": txinfo.get("Account"),
-                "tx_hash": txinfo.get("hash"),
-                "amount_xrp": float(txinfo.get("Amount"))/1_000_000,
-                "amount_usd": 100,  # Debes traer precio y convertir aquí
-                "marketcap": 1_800_000,  # Lo puedes calcular/fetch adecuado en la integración real
-                "is_new_holder": True,
-                "increase_pct": 0,
-                "holders_total": 789,  # Supón lo calculas/fetch
-                "trustlines": 4321,
-                "timestamp": txinfo.get("date"),
-            })
-        return result
-    except Exception as e:
-        logging.error(f"Error fetch XRPL: {e}")
-        return []
+async def xrpl_listener(app):
+    URL = "wss://xrplcluster.com"
+    CURRENCY = "4241425941524D59000000000000000000000000"  # BabyArmy (HEX)
+    ISSUER = "rHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh"
+    seen = set()
+    async with websockets.connect(URL) as ws:
+        await ws.send(json.dumps({
+            "id": 1,
+            "command": "subscribe",
+            "streams": ["transactions"]
+        }))
+        while True:
+            data = await ws.recv()
+            try:
+                dct = json.loads(data)
+                tx = dct.get("transaction", {})
+                # Solo Payment con Amount dict (Trustline)
+                amt = tx.get("Amount")
+                if tx.get("TransactionType") != "Payment" or not isinstance(amt, dict):
+                    continue
+                if amt.get("currency") != CURRENCY or amt.get("issuer") != ISSUER:
+                    continue
+                txhash = tx.get("hash")
+                if txhash in seen:
+                    continue
+                seen.add(txhash)
+                buyer = tx.get("Account")
+                amount_xrp = float(amt.get("value"))
+                # TODO: Sustituye con API si quieres precio/marketcap real en USD
+                amount_usd = amount_xrp * 0.5  # ← Ejemplo simple, cambia por el real si lo tienes
+                marketcap = 1_800_000
+                is_new_holder = True
+                increase_pct = 15
+                holders_total = 789
+                trustlines = 4321
 
-# Guardamos TX ya notificadas para evitar repeticiones
-seen_txs = set()
+                await send_buy_message(
+                    app, buyer=buyer, tx_hash=txhash, amount_xrp=amount_xrp,
+                    amount_usd=amount_usd, marketcap=marketcap,
+                    is_new_holder=is_new_holder, increase_pct=increase_pct,
+                    holders_total=holders_total, trustlines=trustlines
+                )
+            except Exception as ex:
+                logging.warning(f"Parse fail: {ex}")
 
-async def notify_buys(app):
-    while True:
-        buys = get_latest_buys()
-        for tx in buys:
-            txid = tx["tx_hash"]
-            if txid in seen_txs:
-                continue
-            seen_txs.add(txid)
-            await send_buy_message(app, tx)
-        await asyncio.sleep(20)  # Consulta cada 20 seg
-
-async def send_buy_message(app, tx):
-    emoji_count = min(int(tx["amount_usd"] // 10), 20)
+async def send_buy_message(
+    app, buyer, tx_hash, amount_xrp, amount_usd, marketcap,
+    is_new_holder, increase_pct, holders_total, trustlines
+):
+    emoji_count = min(int(amount_usd // 10), 20)
     emojis = config["emoji"] * emoji_count if emoji_count else "💸"
-    msg = (
-        f"{emojis}\n\n"
-        f"🪙 <b>COMPRA:</b> {tx['amount_xrp']:.2f} XRP (${tx['amount_usd']:.2f})\n"
-        f"💸 <b>Marketcap:</b> ${tx['marketcap']:,}\n"
-        + ("🎉 ¡Nuevo holder!\n" if tx["is_new_holder"] else f"⬆️ Aumentó su posición en {tx['increase_pct']}%\n")
-        + f"👥 Holders: <b>{tx['holders_total']}</b>\n"
-        f"🔗 Trustlines: <b>{tx['trustlines']}</b>\n\n"
+    holder_text = (
+        "🎉 ¡Nuevo holder!\n" if is_new_holder
+        else f"⬆️ Aumentó su posición en {increase_pct}%\n"
+    )
+    msg = config["msg_template"].format(
+        emojis=emojis, amount_xrp=amount_xrp, amount_usd=amount_usd,
+        marketcap=marketcap, holder_text=holder_text,
+        holders_total=holders_total, trustlines=trustlines
     )
     buttons = [
         [
-            InlineKeyboardButton("Tx", url=f"https://xrpscan.com/tx/{tx['tx_hash']}"),
-            InlineKeyboardButton("Buyer", url=f"https://xrpscan.com/account/{tx['buyer']}"),
-            InlineKeyboardButton("Chart", url="https://dexscreener.com/xrpl/4241425941524D59000000000000000000000000.rHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_xrp"),
+            InlineKeyboardButton(
+                config["button_tx"], url=config["link_tx"].format(tx_hash=tx_hash)
+            ),
+            InlineKeyboardButton(
+                config["button_buyer"], url=config["link_buyer"].format(buyer=buyer)
+            ),
+            InlineKeyboardButton(
+                config["button_chart"], url=config["link_chart"])
         ],
         [
-            InlineKeyboardButton("Xmagnetic", url="https://xmagnetic.org/dex/BABYARMY%2BrHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_XRP%2BXRP?network=mainnet"),
-            InlineKeyboardButton("BUY", url="https://t.me/firstledger_bot?start=ref_P3qusTcUSdc2")
+            InlineKeyboardButton(
+                config["button_xmag"], url=config["link_xmag"]
+            ),
+            InlineKeyboardButton(
+                config["button_buy"], url=config["link_buy"]
+            )
         ]
     ]
     keyboard = InlineKeyboardMarkup(buttons)
@@ -97,22 +130,32 @@ async def send_buy_message(app, tx):
         reply_markup=keyboard
     )
 
-# ========= ADMIN BOTONES PANEL =========
-
-from telegram.ext import CallbackQueryHandler, CommandHandler
-
+# ========== Admin Panel Max Personalización =========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("No tienes permisos para usar este panel.")
         return
+    edit_list = [
+        ("Cambiar emojis", "setemoji"),
+        ("Cambiar video", "setvideo"),
+        ("Cambiar plantilla mensaje", "setmsg"),
+        ("Cambiar link TX", "setlink_tx"),
+        ("Cambiar link buyer", "setlink_buyer"),
+        ("Cambiar link chart", "setlink_chart"),
+        ("Cambiar link xmagnetic", "setlink_xmag"),
+        ("Cambiar link buy", "setlink_buy"),
+        ("Cambiar texto botón Tx", "setbutton_tx"),
+        ("Cambiar texto botón Buyer", "setbutton_buyer"),
+        ("Cambiar texto botón Chart", "setbutton_chart"),
+        ("Cambiar texto botón Xmagnetic", "setbutton_xmag"),
+        ("Cambiar texto botón BUY", "setbutton_buy"),
+    ]
     keyboard = [
-        [
-            InlineKeyboardButton("Cambiar Emojis", callback_data='admin_setemoji'),
-            InlineKeyboardButton("Cambiar Video", callback_data='admin_setvideo')
-        ]
+        [InlineKeyboardButton(text, callback_data=cb)]
+        for text, cb in edit_list
     ]
     await update.message.reply_text(
-        "Panel de ajustes de BabyArmy Bot",
+        "PANEL DE ADMINISTRACIÓN: Cambia cualquier aspecto del mensaje y botones.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -123,42 +166,72 @@ async def handle_admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.edit_message_text("No tienes permisos.")
         return
 
-    if query.data == 'admin_setemoji':
-        await query.edit_message_text("Responde a este mensaje con el/los emojis nuevos (máx 8 caracteres).")
-        context.user_data['wait_emoji'] = True
-    elif query.data == 'admin_setvideo':
-        await query.edit_message_text("Responde a este mensaje con el enlace directo al nuevo video (mp4).")
-        context.user_data['wait_video'] = True
+    field = query.data
+    prompts = {
+        "setemoji": "Responde con los nuevos emojis (máx 8 caracteres):",
+        "setvideo": "Responde con el enlace directo al nuevo video (mp4):",
+        "setmsg": (
+            "Responde con la NUEVA PLANTILLA de mensaje. Puedes usar estos campos: "
+            "{emojis} {amount_xrp} {amount_usd} {marketcap} {holder_text} "
+            "{holders_total} {trustlines}"
+        ),
+        "setlink_tx": "Responde con la nueva URL para 'Tx' (usa {tx_hash} para el hash).",
+        "setlink_buyer": "Responde con la nueva URL para 'Buyer' (usa {buyer} para la dirección).",
+        "setlink_chart": "Responde con la nueva URL de Chart",
+        "setlink_xmag": "Responde con la nueva URL de Xmagnetic",
+        "setlink_buy": "Responde con la nueva URL de BUY",
+        "setbutton_tx": "Responde con el NUEVO texto para el botón 'Tx'",
+        "setbutton_buyer": "Responde con el NUEVO texto para el botón 'Buyer'",
+        "setbutton_chart": "Responde con el NUEVO texto para el botón 'Chart'",
+        "setbutton_xmag": "Responde con el NUEVO texto para el botón 'Xmagnetic'",
+        "setbutton_buy": "Responde con el NUEVO texto para el botón 'BUY'"
+    }
+    await query.edit_message_text(prompts.get(field, "¿Qué deseas personalizar?"))
+    context.user_data["edit_field"] = field
 
-async def text_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def admin_text_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         return
-    ud = context.user_data
-    if ud.get('wait_emoji'):
-        if len(update.message.text) <= 8:
-            config["emoji"] = update.message.text
-            await update.message.reply_text(f"Emoji actualizado a: {config['emoji']}")
+    field = context.user_data.pop("edit_field", None)
+    if not field:
+        return
+    text = update.message.text.strip()
+    # Controla el campo editado
+    if field == "setemoji":
+        if len(text) <= 8:
+            config["emoji"] = text
+            await update.message.reply_text(f"Emoji actualizado a: {text}")
         else:
-            await update.message.reply_text("Demasiado largo. Intenta con menos de 8 caracteres.")
-        ud['wait_emoji'] = False
-    elif ud.get('wait_video'):
-        if update.message.text.lower().startswith("http"):
-            config["video"] = update.message.text
-            await update.message.reply_text("Video actualizado correctamente.")
+            await update.message.reply_text("Máximo 8 caracteres.")
+    elif field == "setvideo":
+        if text.lower().startswith("http"):
+            config["video"] = text
+            await update.message.reply_text("Video actualizado.")
         else:
-            await update.message.reply_text("No es un enlace válido.")
-        ud['wait_video'] = False
+            await update.message.reply_text("Enlace inválido.")
+    elif field == "setmsg":
+        config["msg_template"] = text
+        await update.message.reply_text("Plantilla de mensaje actualizada.")
+    elif field.startswith("setlink_"):
+        key = field.replace("setlink_", "link_")
+        config[key] = text
+        await update.message.reply_text(f"Link actualizado para {key}.")
+    elif field.startswith("setbutton_"):
+        key = field.replace("setbutton_", "button_")
+        config[key] = text
+        await update.message.reply_text(f"Texto del botón '{key}' actualizado.")
+    else:
+        await update.message.reply_text("Campo desconocido.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-
-    # Admin/Config buttons
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(handle_admin_buttons))
-    app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), text_reply))
-    # Arranca polling y la tarea XRPL
-    app.run_async(notify_buys(app))
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), admin_text_response))
+
+    # Ejecuta el listener de XRPL en paralelo (no bloquea el bot)
+    app.run_async(xrpl_listener(app))
     app.run_polling()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
