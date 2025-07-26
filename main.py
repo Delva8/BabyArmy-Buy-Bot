@@ -13,6 +13,7 @@ TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
 
+# Configuración editable por panel admin (emojis, video, textos, links, etc.)
 config = {
     "emoji": "👶🏼⚔️",
     "video": "https://www.pexels.com/video/854159.mp4",
@@ -66,7 +67,7 @@ async def xrpl_listener(app):
                 seen.add(txhash)
                 buyer = tx.get("Account")
                 amount_xrp = float(amt.get("value"))
-                amount_usd = amount_xrp * 0.5  # Ejemplo, cámbialo por conversión real si lo necesitas
+                amount_usd = amount_xrp * 0.5  # Cambia a conversión real si lo necesitas
                 marketcap = 1_800_000
                 is_new_holder = True
                 increase_pct = 15
@@ -126,7 +127,7 @@ async def send_buy_message(
         reply_markup=keyboard
     )
 
-# ========== Admin Panel Max Personalización =========
+# ========== Panel Admin Full Personalización =========
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
         await update.message.reply_text("No tienes permisos para usar este panel.")
@@ -224,11 +225,11 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_admin_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), admin_text_response))
 
-    # Usar create_task dentro del callback de inicio, NO run_async
-    async def on_startup(app_: Application):
-        app_.create_task(xrpl_listener(app_))
+    # Lanza el listener XRPL como tarea asincrónica antes de polling
+    loop = asyncio.get_event_loop()
+    loop.create_task(xrpl_listener(app))
 
-    app.run_polling(on_startup=on_startup)
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
