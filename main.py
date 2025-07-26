@@ -13,7 +13,6 @@ TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
 
-# Configuración editable por panel admin (emojis, video, textos, links, etc.)
 config = {
     "emoji": "👶🏼⚔️",
     "video": "https://www.pexels.com/video/854159.mp4",
@@ -67,7 +66,7 @@ async def xrpl_listener(app):
                 seen.add(txhash)
                 buyer = tx.get("Account")
                 amount_xrp = float(amt.get("value"))
-                amount_usd = amount_xrp * 0.5  # Cambia a conversión real si lo necesitas
+                amount_usd = amount_xrp * 0.5
                 marketcap = 1_800_000
                 is_new_holder = True
                 increase_pct = 15
@@ -225,7 +224,7 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_admin_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), admin_text_response))
 
-    # Lanza el listener XRPL como tarea asincrónica antes de polling
+    # Inicia el listener XRPL como tarea en segundo plano
     loop = asyncio.get_event_loop()
     loop.create_task(xrpl_listener(app))
 
