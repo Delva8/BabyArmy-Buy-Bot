@@ -13,7 +13,6 @@ TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
 
-# Diccionario editable en vivo por panel admin
 config = {
     "emoji": "👶🏼⚔️",
     "video": "https://www.pexels.com/video/854159.mp4",
@@ -25,7 +24,6 @@ config = {
         "👥 Holders: <b>{holders_total}</b>\n"
         "🔗 Trustlines: <b>{trustlines}</b>\n\n"
     ),
-    # Enlaces y textos de botón
     "link_tx": "https://xrpscan.com/tx/{tx_hash}",
     "link_buyer": "https://xrpscan.com/account/{buyer}",
     "link_chart": "https://dexscreener.com/xrpl/4241425941524D59000000000000000000000000.rHJGTuRZLakgmV4Dyb1m3Tj8MMCH4xAoYh_xrp",
@@ -57,7 +55,6 @@ async def xrpl_listener(app):
             try:
                 dct = json.loads(data)
                 tx = dct.get("transaction", {})
-                # Solo Payment con Amount dict (Trustline)
                 amt = tx.get("Amount")
                 if tx.get("TransactionType") != "Payment" or not isinstance(amt, dict):
                     continue
@@ -69,8 +66,7 @@ async def xrpl_listener(app):
                 seen.add(txhash)
                 buyer = tx.get("Account")
                 amount_xrp = float(amt.get("value"))
-                # TODO: Sustituye con API si quieres precio/marketcap real en USD
-                amount_usd = amount_xrp * 0.5  # ← Ejemplo simple, cambia por el real si lo tienes
+                amount_usd = amount_xrp * 0.5  # Ejemplo, cámbialo por conversión real si lo necesitas
                 marketcap = 1_800_000
                 is_new_holder = True
                 increase_pct = 15
@@ -196,7 +192,6 @@ async def admin_text_response(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not field:
         return
     text = update.message.text.strip()
-    # Controla el campo editado
     if field == "setemoji":
         if len(text) <= 8:
             config["emoji"] = text
@@ -229,9 +224,11 @@ def main():
     app.add_handler(CallbackQueryHandler(handle_admin_buttons))
     app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), admin_text_response))
 
-    # Ejecuta el listener de XRPL en paralelo (no bloquea el bot)
-    app.run_async(xrpl_listener(app))
-    app.run_polling()
+    # Usar create_task dentro del callback de inicio, NO run_async
+    async def on_startup(app_: Application):
+        app_.create_task(xrpl_listener(app_))
+
+    app.run_polling(on_startup=on_startup)
 
 if __name__ == "__main__":
     main()
