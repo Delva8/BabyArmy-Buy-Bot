@@ -12,7 +12,7 @@ from telegram.ext import (
     ContextTypes, filters
 )
 
-# --- DATOS REALES (NO CAMBIAR) ---
+# --- DATOS REALES ---
 TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
@@ -25,7 +25,8 @@ config = {
     "msg_template": (
         "{emojis}\n\n"
         "<b>Precio XRP:</b> 1 XRP = ${xrp_usd:.4f}\n"
-        "🪙 <b>COMPRA:</b> {amount_xrp:.2f} XRP (${amount_usd:.2f})\n"
+        "<b>Precio BabyArmy:</b> 1 = {price_babyarmy_xrp:.10f} XRP (${price_babyarmy_usd:.10f})\n"
+        "🪙 <b>COMPRA:</b> {amount_xrp:.2f} XRP ($ {amount_usd:.2f})\n"
         "💸 <b>Marketcap:</b> ${marketcap:,}\n"
         "{holder_text}"
         "👥 Holders: <b>{holders_total}</b>\n"
@@ -44,7 +45,7 @@ config = {
 }
 pending_config = {}
 
-# --- FLASK ENDPOINT PARA MANTENER VIVO ---
+# --- FLASK KEEP-ALIVE (para Replit/UptimeRobot) ---
 flask_app = Flask(__name__)
 @flask_app.route("/")
 def index():
@@ -56,6 +57,8 @@ def run_flask():
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- FUNCIONES DE PRECIO & MARKETCAP EN TIEMPO REAL ---
+
 async def get_xrp_price():
     url = "https://api.coingecko.com/api/v3/simple/price?ids=ripple&vs_currencies=usd"
     async with aiohttp.ClientSession() as session:
@@ -63,7 +66,21 @@ async def get_xrp_price():
             data = await resp.json()
             return float(data["ripple"]["usd"])
 
-def build_preview_message(cfg=None, *, example_data=None, xrp_usd=0.5):
+async def get_babyarmy_price_xrp():
+    # DexScreener API para obtener precio en XRP y USD
+    url = "https://api.dexscreener.com/latest/dex/tokens/4241425941524D59000000000000000000000000" # Token BabyArmy HEX
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, timeout=10) as resp:
+            data = await resp.json()
+            # Busca el pool con más liquidez - normalmente el primero
+            if "pairs" in data and data["pairs"]:
+                price_babyarmy_xrp = float(data["pairs"][0]["priceNative"])
+                price_babyarmy_usd = float(data["pairs"][0]["priceUsd"])
+                return price_babyarmy_xrp, price_babyarmy_usd
+    # Fallback si error
+    return 0,0
+
+def build_preview_message(cfg=None, *, example_data=None, xrp_usd=0.5, price_babyarmy_xrp=1e-6, price_babyarmy_usd=0.000001):
     if cfg is None:
         cfg = config
     data = example_data or {
@@ -71,7 +88,7 @@ def build_preview_message(cfg=None, *, example_data=None, xrp_usd=0.5):
         "tx_hash": "EXAMPLETXHASH",
         "amount_xrp": 321.5,
         "amount_usd": 1234,
-        "marketcap": int(321.5 * xrp_usd * SUPPLY),  # preview marketcap
+        "marketcap": int(price_babyarmy_usd * SUPPLY),
         "is_new_holder": True,
         "increase_pct": 15,
         "holders_total": 789,
@@ -87,11 +104,13 @@ def build_preview_message(cfg=None, *, example_data=None, xrp_usd=0.5):
         emojis=emojis,
         amount_xrp=data["amount_xrp"],
         amount_usd=data["amount_usd"],
-        marketcap=int(data["marketcap"]),
+        marketcap=int(price_babyarmy_usd * SUPPLY),
         holder_text=holder_text,
         holders_total=data["holders_total"],
         trustlines=data["trustlines"],
-        xrp_usd=xrp_usd
+        xrp_usd=xrp_usd,
+        price_babyarmy_xrp=price_babyarmy_xrp,
+        price_babyarmy_usd=price_babyarmy_usd
     )
 
 def build_buttons(cfg=None, *, tx_hash="EXAMPLETXHASH", buyer="rEXAMPLEaddress"):
@@ -109,7 +128,7 @@ def build_buttons(cfg=None, *, tx_hash="EXAMPLETXHASH", buyer="rEXAMPLEaddress")
         ]
     ])
 
-# --- XRPL WEBSOCKET LISTENER ---
+# --- XRPL WEBSOCKET LISTENER Y NOTIFICACIÓN ---
 async def xrpl_listener(app):
     URL = "wss://xrplcluster.com"
     CURRENCY = "4241425941524D59000000000000000000000000"
@@ -135,8 +154,9 @@ async def xrpl_listener(app):
                         buyer = tx.get("Account")
                         amount_xrp = float(amt.get("value"))
                         xrp_usd = await get_xrp_price() or 0.5
+                        price_babyarmy_xrp, price_babyarmy_usd = await get_babyarmy_price_xrp()
                         amount_usd = amount_xrp * xrp_usd
-                        marketcap = int(SUPPLY * xrp_usd)  # Marketcap usando supply real
+                        marketcap = int(price_babyarmy_usd * SUPPLY)
                         is_new_holder = True
                         increase_pct = 15
                         holders_total = 789
@@ -146,7 +166,8 @@ async def xrpl_listener(app):
                             amount_usd=amount_usd, marketcap=marketcap,
                             is_new_holder=is_new_holder, increase_pct=increase_pct,
                             holders_total=holders_total, trustlines=trustlines,
-                            xrp_usd=xrp_usd
+                            xrp_usd=xrp_usd, price_babyarmy_xrp=price_babyarmy_xrp,
+                            price_babyarmy_usd=price_babyarmy_usd
                         )
                     except Exception as ex:
                         logging.warning(f"Parse fail: {ex}")
@@ -156,7 +177,8 @@ async def xrpl_listener(app):
 
 async def send_buy_message(
     app, buyer, tx_hash, amount_xrp, amount_usd, marketcap,
-    is_new_holder, increase_pct, holders_total, trustlines, xrp_usd
+    is_new_holder, increase_pct, holders_total, trustlines,
+    xrp_usd, price_babyarmy_xrp, price_babyarmy_usd
 ):
     emoji_count = min(int(amount_usd // 10), 20)
     emojis = config["emoji"] * emoji_count if emoji_count else "💸"
@@ -167,7 +189,7 @@ async def send_buy_message(
         emojis=emojis, amount_xrp=amount_xrp, amount_usd=amount_usd,
         marketcap=marketcap, holder_text=holder_text,
         holders_total=holders_total, trustlines=trustlines,
-        xrp_usd=xrp_usd
+        xrp_usd=xrp_usd, price_babyarmy_xrp=price_babyarmy_xrp, price_babyarmy_usd=price_babyarmy_usd
     )
     keyboard = build_buttons(cfg=config, tx_hash=tx_hash, buyer=buyer)
     try:
@@ -215,7 +237,8 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
     pending_config[update.effective_user.id] = {"field": field}
     val = ("Archivo Telegram" if config["video_file_id"] else f"Enlace: {config['video_url']}") if field == "video_file_id" else config.get(field, "(sin valor)")
     xrp_usd = await get_xrp_price() or 0.5
-    msg_preview = build_preview_message({**config, field: "<NUEVO VALOR PROVISIONAL>"}, xrp_usd=xrp_usd)
+    price_babyarmy_xrp, price_babyarmy_usd = await get_babyarmy_price_xrp()
+    msg_preview = build_preview_message({**config, field: "<NUEVO VALOR PROVISIONAL>"}, xrp_usd=xrp_usd, price_babyarmy_xrp=price_babyarmy_xrp, price_babyarmy_usd=price_babyarmy_usd)
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Aceptar", callback_data="confirm_change"), InlineKeyboardButton("Cancelar", callback_data="cancel_change")]])
     text = (
         f"Actualmente está:\n<code>{val}</code>\n\n"
@@ -249,7 +272,8 @@ async def admin_text_response(update: Update, context: ContextTypes.DEFAULT_TYPE
         new_cfg = config.copy()
         new_cfg[field] = update.message.text
         xrp_usd = await get_xrp_price() or 0.5
-        msg_preview = build_preview_message(new_cfg, xrp_usd=xrp_usd)
+        price_babyarmy_xrp, price_babyarmy_usd = await get_babyarmy_price_xrp()
+        msg_preview = build_preview_message(new_cfg, xrp_usd=xrp_usd, price_babyarmy_xrp=price_babyarmy_xrp, price_babyarmy_usd=price_babyarmy_usd)
         await update.message.reply_text(f"Así se vería el mensaje con este ajuste:\n\n{msg_preview}", parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Aceptar", callback_data="confirm_change"), InlineKeyboardButton("Cancelar", callback_data="cancel_change")]]), disable_web_page_preview=True)
 
 async def handle_confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
