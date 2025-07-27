@@ -16,6 +16,7 @@ from telegram.ext import (
 TOKEN = "8482524807:AAGu-hiB7P58plabCEGkGFd7I3xcTYaCI9w"
 OWNER_ID = 280793936
 TARGET_CHAT_ID = -1002519528951
+
 config = {
     "emoji": "👶🏼⚔️",
     "video_file_id": None,
@@ -51,7 +52,7 @@ def index():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=8080)
 
-# --- FUNCIONES DEL BOT (NO CAMBIES) ---
+# --- FUNCIONES BOT ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -87,9 +88,13 @@ def build_preview_message(cfg=None, *, example_data=None, xrp_price=0.5):
     )
     price_line = f"<b>Precio XRP</b>: 1 XRP = ${xrp_price:.4f}\n" if xrp_price else ""
     return cfg["msg_template"].format(
-        emojis=emojis, amount_xrp=data["amount_xrp"], amount_usd=data["amount_usd"],
-        marketcap=data["marketcap"], holder_text=holder_text,
-        holders_total=data["holders_total"], trustlines=data["trustlines"],
+        emojis=emojis,
+        amount_xrp=data["amount_xrp"],
+        amount_usd=data["amount_usd"],
+        marketcap=data["marketcap"],
+        holder_text=holder_text,
+        holders_total=data["holders_total"],
+        trustlines=data["trustlines"],
         xrp_price_line=price_line
     )
 
@@ -98,18 +103,13 @@ def build_buttons(cfg=None, *, tx_hash="EXAMPLETXHASH", buyer="rEXAMPLEaddress")
         cfg = config
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(
-                cfg["button_tx"], url=cfg["link_tx"].format(tx_hash=tx_hash)),
-            InlineKeyboardButton(
-                cfg["button_buyer"], url=cfg["link_buyer"].format(buyer=buyer)),
-            InlineKeyboardButton(
-                cfg["button_chart"], url=cfg["link_chart"]),
+            InlineKeyboardButton(cfg["button_tx"], url=cfg["link_tx"].format(tx_hash=tx_hash)),
+            InlineKeyboardButton(cfg["button_buyer"], url=cfg["link_buyer"].format(buyer=buyer)),
+            InlineKeyboardButton(cfg["button_chart"], url=cfg["link_chart"]),
         ],
         [
-            InlineKeyboardButton(
-                cfg["button_xmag"], url=cfg["link_xmag"]),
-            InlineKeyboardButton(
-                cfg["button_buy"], url=cfg["link_buy"])
+            InlineKeyboardButton(cfg["button_xmag"], url=cfg["link_xmag"]),
+            InlineKeyboardButton(cfg["button_buy"], url=cfg["link_buy"])
         ]
     ])
 
@@ -165,12 +165,12 @@ async def send_buy_message(
     emoji_count = min(int(amount_usd // 10), 20)
     emojis = config["emoji"] * emoji_count if emoji_count else "💸"
     holder_text = (
-        "🎉 ¡Nuevo holder!\n" if is_new_holder
-        else f"⬆️ Aumentó su posición en {increase_pct}%\n"
+        "🎉 ¡Nuevo holder!\n" if is_new_holder else f"⬆️ Aumentó su posición en {increase_pct}%\n"
     )
     price_line = f"<b>Precio XRP</b>: 1 XRP = ${xrp_usd:.4f}\n" if xrp_usd else ""
     msg = config["msg_template"].format(
-        emojis=emojis, amount_xrp=amount_xrp, amount_usd=amount_usd,
+        emojis=emojis,
+        amount_xrp=amount_xrp, amount_usd=amount_usd,
         marketcap=marketcap, holder_text=holder_text,
         holders_total=holders_total, trustlines=trustlines,
         xrp_price_line=price_line
@@ -178,39 +178,155 @@ async def send_buy_message(
     keyboard = build_buttons(cfg=config, tx_hash=tx_hash, buyer=buyer)
     try:
         if config.get("video_file_id"):
-            await app.bot.send_video(
-                chat_id=TARGET_CHAT_ID,
-                video=config["video_file_id"],
-                caption=msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
+            await app.bot.send_video(chat_id=TARGET_CHAT_ID, video=config["video_file_id"],
+                caption=msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
         else:
-            await app.bot.send_video(
-                chat_id=TARGET_CHAT_ID,
-                video=config["video_url"],
-                caption=msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=keyboard
-            )
+            await app.bot.send_video(chat_id=TARGET_CHAT_ID, video=config["video_url"],
+                caption=msg, parse_mode=ParseMode.HTML, reply_markup=keyboard)
     except Exception as ex:
         logging.warning(f"No se pudo enviar video: {ex}")
 
-# --- PANEL ADMIN omito por brevedad, usa el panel que ya tenías arriba ---
-# Añade aquí el admin_fields, admin_panel, admin_callback, admin_text_response,
-# handle_confirm_cancel que ya usas. Exactamente igual.
+admin_fields = [
+    ("emoji", "Cambiar emojis"),
+    ("video_file_id", "Cambiar video (envía video o enlace mp4)"),
+    ("msg_template", "Plantilla mensaje"),
+    ("link_tx", "Enlace botón Tx"),
+    ("link_buyer", "Enlace botón Buyer"),
+    ("link_chart", "Enlace botón Chart"),
+    ("link_xmag", "Enlace botón Xmagnetic"),
+    ("link_buy", "Enlace botón BUY"),
+    ("button_tx", "Texto botón Tx"),
+    ("button_buyer", "Texto botón Buyer"),
+    ("button_chart", "Texto botón Chart"),
+    ("button_xmag", "Texto botón Xmagnetic"),
+    ("button_buy", "Texto botón BUY"),
+]
 
-# Para ejemplo usaremos un comando /start mínimo
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("No tienes permisos para usar este panel.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(text, callback_data=f"edit_{field}")]
+        for field, text in admin_fields
+    ]
+    await update.message.reply_text("PANEL DE ADMINISTRACIÓN: Selecciona el ajuste a editar.",
+        reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if update.effective_user.id != OWNER_ID:
+        await query.edit_message_text("No tienes permisos.")
+        return
+    action = query.data
+    if not action.startswith("edit_"):
+        return
+    field = action.split("_", 1)[1]
+    pending_config[update.effective_user.id] = {"field": field}
+    if field == "video_file_id":
+        val = "Archivo Telegram" if config["video_file_id"] else f"Enlace: {config['video_url']}"
+    else:
+        val = config.get(field, "(sin valor)")
+    xrp_usd = await get_xrp_price() or 0.5
+    msg_preview = build_preview_message(
+        {**config, field: "<NUEVO VALOR PROVISIONAL>"}, xrp_price=xrp_usd)
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Aceptar", callback_data="confirm_change"),
+         InlineKeyboardButton("Cancelar", callback_data="cancel_change")]
+    ])
+    text = (
+        f"Actualmente está:\n<code>{val}</code>\n\n"
+        "Envía el NUEVO valor a usar para este ajuste.\n\n"
+        "<b>Así se vería el mensaje tras el cambio:</b>\n"
+        f"{msg_preview}"
+    )
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard, disable_web_page_preview=True)
+
+async def admin_text_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID or update.effective_user.id not in pending_config:
+        return
+    pending = pending_config[update.effective_user.id]
+    field = pending["field"]
+    if field == "video_file_id":
+        if update.message.video:
+            config["video_file_id"] = update.message.video.file_id
+            pending["value"] = update.message.video.file_id
+            await update.message.reply_text(
+                "Video recibido. ¿Quieres guardar este video como nuevo video?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Aceptar", callback_data="confirm_change"),
+                     InlineKeyboardButton("Cancelar", callback_data="cancel_change")]
+                ])
+            )
+        elif update.message.text and update.message.text.startswith("http"):
+            config["video_url"] = update.message.text
+            config["video_file_id"] = None
+            pending["value"] = update.message.text
+            await update.message.reply_text(
+                "Enlace recibido. ¿Quieres guardar este enlace como video?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("Aceptar", callback_data="confirm_change"),
+                     InlineKeyboardButton("Cancelar", callback_data="cancel_change")]
+                ])
+            )
+        else:
+            await update.message.reply_text("Adjunta un video .mp4 o pon un enlace directo a video.")
+    else:
+        if not update.message.text:
+            await update.message.reply_text("Por favor, envía texto.")
+            return
+        pending["value"] = update.message.text
+        new_cfg = config.copy()
+        new_cfg[field] = update.message.text
+        xrp_usd = await get_xrp_price() or 0.5
+        msg_preview = build_preview_message(new_cfg, xrp_price=xrp_usd)
+        await update.message.reply_text(
+            f"Así se vería el mensaje con este ajuste:\n\n{msg_preview}",
+            parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Aceptar", callback_data="confirm_change"),
+                 InlineKeyboardButton("Cancelar", callback_data="cancel_change")]
+            ]),
+            disable_web_page_preview=True
+        )
+
+async def handle_confirm_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if update.effective_user.id != OWNER_ID or update.effective_user.id not in pending_config:
+        await query.answer("No hay cambio pendiente.", show_alert=True)
+        return
+    pending = pending_config[update.effective_user.id]
+    field = pending["field"]
+    if query.data == "confirm_change":
+        if "value" in pending:
+            if field == "video_file_id" and isinstance(pending["value"], str) and pending["value"].startswith("http"):
+                config["video_url"] = pending["value"]
+                config["video_file_id"] = None
+            elif field == "video_file_id":
+                config["video_file_id"] = pending["value"]
+            else:
+                config[field] = pending["value"]
+            await query.edit_message_text("✅ Ajuste guardado.")
+        else:
+            await query.edit_message_text("Por favor, envía el ajuste antes de confirmar.")
+    else:
+        await query.edit_message_text("❌ Cambio cancelado.")
+    del pending_config[update.effective_user.id]
+
+# Comando mínimo para probar que está vivo
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("¡Hola! El bot BabyArmy está activo.")
 
 def main():
-    # Inicia servidor Flask en hilo paralelo
     threading.Thread(target=run_flask, daemon=True).start()
-    # Arranca el bot Telegram
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    # Añade aquí el resto de tus handlers/funciones administrativas...
+    app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^edit_"))
+    app.add_handler(CallbackQueryHandler(handle_confirm_cancel, pattern="^(confirm_change|cancel_change)$"))
+    app.add_handler(MessageHandler(filters.TEXT & filters.User(OWNER_ID), admin_text_response))
+    app.add_handler(MessageHandler(filters.VIDEO & filters.User(OWNER_ID), admin_text_response))
     loop = asyncio.get_event_loop()
     loop.create_task(xrpl_listener(app))
     app.run_polling()
